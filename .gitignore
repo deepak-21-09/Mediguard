@@ -1,6 +1,8 @@
 # ── Secrets & credentials — NEVER commit these ───────────────────────────────
 .env
 .env.local
+.env.example
+.env.local.example
 .env.*.local
 *.pem
 *.key
@@ -99,5 +101,4 @@ tmp/
 temp/
 
 # ── Keep these example files ──────────────────────────────────────────────────
-!.env.example
-!.env.local.example
+# (example env files excluded — configure your own from the README)
