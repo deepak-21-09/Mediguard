@@ -64,7 +64,15 @@ async def _try_clerk(token: str) -> Optional[str]:
 
 
 def _try_local_jwt(token: str) -> Optional[str]:
-    """Verify a locally-signed HS256 JWT. Returns user_id or None."""
+    """
+    Verify a locally-signed HS256 JWT. Returns user_id or None.
+    Disabled in production unless SECRET_KEY has been replaced with a safe value
+    (the startup check in main.py ensures a weak key can't reach this point, but
+    we add a belt-and-suspenders guard here too).
+    """
+    if settings.ENVIRONMENT == "production" and not settings.is_secret_key_safe:
+        # Should never be reached — validate_production_secrets() blocks startup first.
+        return None
     try:
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
@@ -92,16 +100,36 @@ async def get_current_user_id(
     # 1. Supabase
     user_id = await _try_supabase(token)
     if user_id:
-        return user_id
+        return await _verify_user_exists(user_id, db, credentials_exception)
 
     # 2. Clerk
     user_id = await _try_clerk(token)
     if user_id:
-        return user_id
+        return await _verify_user_exists(user_id, db, credentials_exception)
 
     # 3. Local JWT (dev)
     user_id = _try_local_jwt(token)
     if user_id:
-        return user_id
+        return await _verify_user_exists(user_id, db, credentials_exception)
 
     raise credentials_exception
+
+
+async def _verify_user_exists(
+    user_id: str,
+    db: AsyncSession,
+    exc: HTTPException,
+) -> str:
+    """
+    Confirm the user_id from the token corresponds to an active User row.
+    Rejects stale tokens for deleted accounts and fabricated sub claims.
+    """
+    from sqlalchemy import select
+    from models.user import User
+
+    result = await db.execute(
+        select(User.id).where(User.id == user_id, User.is_active == True)
+    )
+    if result.scalar_one_or_none() is None:
+        raise exc
+    return user_id

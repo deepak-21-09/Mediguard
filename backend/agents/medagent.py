@@ -7,11 +7,12 @@ import json
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-from agents.tools import MEDAGENT_TOOLS, configure_tools
+from agents.tools import MEDAGENT_TOOLS
 from core.config import settings
 
 
@@ -35,10 +36,11 @@ def _build_llm():
             streaming=True,
         )
 
+
 SYSTEM_PROMPT = """You are MedAgent, an AI-powered personal health assistant for MediGuard.
 
-You have access to the user's complete medication history, symptom logs, health profile, and 
-persistent memory through the Hindsight memory engine. You NEVER forget — everything the user 
+You have access to the user's complete medication history, symptom logs, health profile, and
+persistent memory through the Hindsight memory engine. You NEVER forget — everything the user
 has ever added is accessible to you.
 
 Your responsibilities:
@@ -64,7 +66,6 @@ class AgentState(TypedDict):
 
 def build_medagent():
     llm = _build_llm().bind_tools(MEDAGENT_TOOLS)
-
     tool_node = ToolNode(MEDAGENT_TOOLS)
 
     def should_continue(state: AgentState) -> str:
@@ -73,9 +74,9 @@ def build_medagent():
             return "tools"
         return END
 
-    async def agent_node(state: AgentState) -> AgentState:
+    async def agent_node(state: AgentState, config: RunnableConfig) -> AgentState:
         messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
-        response = await llm.ainvoke(messages)
+        response = await llm.ainvoke(messages, config=config)
         return {"messages": [response]}
 
     graph = StateGraph(AgentState)
@@ -104,9 +105,19 @@ class MedAgentRunner:
         Run a single chat turn.
         history: list of {"role": "user"|"assistant", "content": str}
         Returns the assistant's reply.
+
+        Context (user_id, db_session, memory) is injected per-invocation via
+        RunnableConfig so concurrent requests can never cross-contaminate.
         """
-        # Wire tools to this request's context
-        configure_tools(user_id=user_id, db_session=db_session, memory=memory)
+        # Build per-request config — this is the only place context is set.
+        # Each graph invocation gets its own isolated configurable dict.
+        config = RunnableConfig(
+            configurable={
+                "user_id": user_id,
+                "db_session": db_session,
+                "memory": memory,
+            }
+        )
 
         # Build message list from history
         langchain_messages: list[BaseMessage] = []
@@ -118,7 +129,8 @@ class MedAgentRunner:
         langchain_messages.append(HumanMessage(content=message))
 
         final_state = await self._graph.ainvoke(
-            {"messages": langchain_messages, "user_id": user_id}
+            {"messages": langchain_messages, "user_id": user_id},
+            config=config,
         )
 
         last = final_state["messages"][-1]

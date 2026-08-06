@@ -1,6 +1,14 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 
+# Known weak/default keys that must never be used in production.
+_KNOWN_DEFAULT_KEYS = {
+    "change-me-in-production",
+    "mediguard-local-dev-secret-key-2025",
+    "your-super-secret-jwt-key-change-in-production",
+    "",
+}
+
 
 class Settings(BaseSettings):
     # App
@@ -60,6 +68,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
 
     @property
+    def is_secret_key_safe(self) -> bool:
+        """True only when SECRET_KEY is a real value (not blank or a known default)."""
+        return self.SECRET_KEY.strip() not in _KNOWN_DEFAULT_KEYS
+
+    @property
     def is_supabase_configured(self) -> bool:
         return bool(self.SUPABASE_URL and self.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -73,3 +86,29 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_production_secrets() -> None:
+    """
+    Hard-fail at startup if ENVIRONMENT=production and SECRET_KEY is weak.
+
+    Generate a safe key with:
+        python -c "import secrets; print(secrets.token_hex(32))"
+    Then set SECRET_KEY=<result> in your production .env.
+    """
+    if settings.ENVIRONMENT != "production":
+        return
+    if not settings.is_secret_key_safe:
+        raise RuntimeError(
+            "\n\n"
+            "╔══════════════════════════════════════════════════════════════╗\n"
+            "║  STARTUP BLOCKED — INSECURE SECRET_KEY IN PRODUCTION        ║\n"
+            "╠══════════════════════════════════════════════════════════════╣\n"
+            "║  ENVIRONMENT=production requires a strong, random SECRET_KEY ║\n"
+            "║  The current value is blank or a known default.              ║\n"
+            "║                                                              ║\n"
+            "║  Generate a safe key and add it to your production .env:     ║\n"
+            "║    python -c \"import secrets; print(secrets.token_hex(32))\" ║\n"
+            "║  Then set:  SECRET_KEY=<generated_value>                     ║\n"
+            "╚══════════════════════════════════════════════════════════════╝\n"
+        )

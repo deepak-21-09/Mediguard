@@ -1,28 +1,58 @@
 """
 MedAgent tools — each tool gives the agent access to the user's health data.
+
+Context isolation
+-----------------
+Previously this module used module-level globals (_user_id, _db_session, _memory)
+set by configure_tools() before each agent invocation. That pattern is unsafe under
+async concurrency: a second request's configure_tools() call can overwrite the
+globals before the first request's tool coroutines have finished executing, causing
+one user's tools to query another user's data.
+
+The fix: every tool receives its request-scoped context (user_id, db_session, memory)
+through LangChain's RunnableConfig dict, which is isolated per graph invocation.
+Callers pass the context once via:
+
+    config = RunnableConfig(configurable={
+        "user_id": ..., "db_session": ..., "memory": ...
+    })
+    await graph.ainvoke(state, config=config)
+
+Tools retrieve it with get_context_from_config(config).
 """
 from __future__ import annotations
 
 import json
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-# These are set per-request in the agent runner
-_user_id: str = ""
-_db_session = None
-_memory = None
+
+# ── Context accessor ──────────────────────────────────────────────────────────
+
+def get_context_from_config(config: RunnableConfig) -> tuple[str, Any, Any]:
+    """
+    Extract (user_id, db_session, memory) from RunnableConfig.
+    Raises RuntimeError if context was not injected — this is a programming
+    error, not a user error.
+    """
+    cfg = config.get("configurable", {})
+    user_id = cfg.get("user_id")
+    db_session = cfg.get("db_session")
+    memory = cfg.get("memory")
+    if not user_id or db_session is None or memory is None:
+        raise RuntimeError(
+            "Tool context not set. Pass user_id, db_session, and memory "
+            "via RunnableConfig(configurable={...}) when invoking the graph."
+        )
+    return user_id, db_session, memory
 
 
-def configure_tools(user_id: str, db_session, memory):
-    global _user_id, _db_session, _memory
-    _user_id = user_id
-    _db_session = db_session
-    _memory = memory
-
+# ── Tools ─────────────────────────────────────────────────────────────────────
 
 @tool
-async def get_medication_history(query: str = "") -> str:
+async def get_medication_history(query: str = "", config: RunnableConfig = None) -> str:
     """
     Retrieve the user's full medication history.
     Optionally pass a query to filter by name or purpose.
@@ -30,8 +60,10 @@ async def get_medication_history(query: str = "") -> str:
     from sqlalchemy import select
     from models.medication import Medication
 
-    stmt = select(Medication).where(Medication.user_id == _user_id)
-    result = await _db_session.execute(stmt)
+    user_id, db_session, _ = get_context_from_config(config)
+
+    stmt = select(Medication).where(Medication.user_id == user_id)
+    result = await db_session.execute(stmt)
     meds = result.scalars().all()
 
     if query:
@@ -52,7 +84,7 @@ async def get_medication_history(query: str = "") -> str:
 
 
 @tool
-async def get_symptom_history(days: int = 30) -> str:
+async def get_symptom_history(days: int = 30, config: RunnableConfig = None) -> str:
     """
     Retrieve symptoms logged by the user in the last N days.
     """
@@ -60,13 +92,15 @@ async def get_symptom_history(days: int = 30) -> str:
     from models.symptom import Symptom
     from datetime import datetime, timedelta
 
+    user_id, db_session, _ = get_context_from_config(config)
+
     since = datetime.utcnow() - timedelta(days=days)
     stmt = (
         select(Symptom)
-        .where(Symptom.user_id == _user_id, Symptom.logged_at >= since)
+        .where(Symptom.user_id == user_id, Symptom.logged_at >= since)
         .order_by(Symptom.logged_at.desc())
     )
-    result = await _db_session.execute(stmt)
+    result = await db_session.execute(stmt)
     symptoms = result.scalars().all()
 
     return json.dumps([
@@ -82,15 +116,17 @@ async def get_symptom_history(days: int = 30) -> str:
 
 
 @tool
-async def get_user_profile() -> str:
+async def get_user_profile(config: RunnableConfig = None) -> str:
     """
     Get the user's health profile: age, weight, allergies, medical conditions.
     """
     from sqlalchemy import select
     from models.profile import UserProfile
 
-    stmt = select(UserProfile).where(UserProfile.user_id == _user_id)
-    result = await _db_session.execute(stmt)
+    user_id, db_session, _ = get_context_from_config(config)
+
+    stmt = select(UserProfile).where(UserProfile.user_id == user_id)
+    result = await db_session.execute(stmt)
     profile = result.scalar_one_or_none()
 
     if not profile:
@@ -108,12 +144,14 @@ async def get_user_profile() -> str:
 
 
 @tool
-async def recall_from_memory(query: str) -> str:
+async def recall_from_memory(query: str, config: RunnableConfig = None) -> str:
     """
     Search the persistent Hindsight memory for relevant past information.
     Use this to answer questions about older events, patterns, or history.
     """
-    memories = await _memory.recall(user_id=_user_id, query=query, top_k=8)
+    user_id, _, memory = get_context_from_config(config)
+
+    memories = await memory.recall(user_id=user_id, query=query, top_k=8)
     if not memories:
         return "No relevant memories found."
     return json.dumps([
@@ -123,16 +161,20 @@ async def recall_from_memory(query: str) -> str:
 
 
 @tool
-async def check_drug_interaction(new_drug: str) -> str:
+async def check_drug_interaction(new_drug: str, config: RunnableConfig = None) -> str:
     """
     Check if a new drug interacts with the user's current medications.
     Returns interaction warnings with severity levels.
     """
     from core.config import settings
-    import json
 
-    # Get current meds
-    med_history = await get_medication_history.ainvoke({"query": ""})
+    user_id, db_session, memory = get_context_from_config(config)
+
+    # Get current meds by re-invoking the medication tool with the same config
+    med_history = await get_medication_history.ainvoke(
+        {"query": ""},
+        config=config,
+    )
     meds_data = json.loads(med_history)
     active_meds = [m["name"] for m in meds_data if m.get("status") == "active"]
 

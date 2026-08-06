@@ -6,10 +6,11 @@ from __future__ import annotations
 import json
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.runnables import RunnableConfig
 
 from models.medication import Medication, DrugInteraction, MedicationStatus, InteractionSeverity
 from memory.hindsight import HindsightMemory
-from agents.tools import check_drug_interaction, configure_tools
+from agents.tools import check_drug_interaction
 
 
 async def list_medications(db: AsyncSession, user_id: str) -> list[Medication]:
@@ -90,8 +91,18 @@ async def _run_interaction_check(
     db: AsyncSession, user_id: str, new_med: Medication, memory: HindsightMemory
 ) -> list[DrugInteraction]:
     """Run AI interaction check and persist results."""
-    configure_tools(user_id=user_id, db_session=db, memory=memory)
-    raw = await check_drug_interaction.ainvoke({"new_drug": new_med.name})
+    # Pass request-scoped context via RunnableConfig — no module globals touched.
+    config = RunnableConfig(
+        configurable={
+            "user_id": user_id,
+            "db_session": db,
+            "memory": memory,
+        }
+    )
+    raw = await check_drug_interaction.ainvoke(
+        {"new_drug": new_med.name},
+        config=config,
+    )
 
     try:
         data = json.loads(raw)

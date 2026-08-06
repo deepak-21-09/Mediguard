@@ -7,7 +7,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from core.config import settings
+from core.config import settings, validate_production_secrets
 from core.database import create_tables
 from core.redis_client import init_redis, close_redis
 
@@ -29,7 +29,8 @@ from api.routes import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup — hard-fail early if production secrets are misconfigured
+    validate_production_secrets()
     await create_tables()
     await init_redis()
     yield

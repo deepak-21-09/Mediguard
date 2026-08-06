@@ -84,18 +84,52 @@ async def scan_prescription(
 ):
     """
     Upload a prescription image.
-    - Saves to Supabase Storage (or local /tmp fallback)
-    - Extracts medication data via GPT-4o Vision
-    - Returns structured medication list + storage URL
+    - Enforces a 10 MB hard size limit before reading the full file.
+    - Validates actual image content via PIL (not just the Content-Type header).
+    - Saves to Supabase Storage (or local /tmp fallback).
+    - Extracts medication data via GPT-4o Vision.
+    - Returns structured medication list + storage URL.
     """
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image")
+    MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
-    image_bytes = await file.read()
+    # ── Size check: read in chunks, reject before loading fully into RAM ──────
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(65536)  # 64 KB chunks
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum allowed size is {MAX_SIZE_BYTES // (1024*1024)} MB.",
+            )
+        chunks.append(chunk)
+
+    image_bytes = b"".join(chunks)
+
+    # ── Magic-byte validation: confirm it's a real image, not a spoofed header ─
+    from io import BytesIO
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        img = Image.open(BytesIO(image_bytes))
+        img.verify()  # raises if the data is corrupt or not a real image
+    except (UnidentifiedImageError, Exception):
+        raise HTTPException(
+            status_code=400,
+            detail="File is not a valid image. Accepted formats: JPEG, PNG, WEBP.",
+        )
+
+    # Use the PIL-detected format for the content type — ignore the client header
+    img = Image.open(BytesIO(image_bytes))  # re-open after verify() (verify() closes it)
+    fmt = (img.format or "JPEG").lower()
+    safe_content_type = f"image/{fmt}"
 
     # Save to storage
     from services.storage_service import save_prescription_image
-    storage_url = await save_prescription_image(user_id, image_bytes, file.content_type)
+    storage_url = await save_prescription_image(user_id, image_bytes, safe_content_type)
 
     # Extract medication data
     result = await extract_prescription(image_bytes)
