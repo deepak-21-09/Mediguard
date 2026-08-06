@@ -18,6 +18,13 @@ from core.database import get_db
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
+# ── Clerk JWKS cache ──────────────────────────────────────────────────────────
+# Fetching JWKS on every request adds 100-500 ms and hammers the Clerk API.
+# Cache the key set for 5 minutes; refresh only when stale or on decode failure.
+_clerk_jwks_cache: Optional[dict] = None
+_clerk_jwks_fetched_at: Optional[datetime] = None
+_CLERK_JWKS_TTL = timedelta(minutes=5)
+
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """Create a local HS256 JWT (used in dev/testing)."""
@@ -41,26 +48,71 @@ async def _try_supabase(token: str) -> Optional[str]:
 
 
 async def _try_clerk(token: str) -> Optional[str]:
-    """Verify against Clerk JWKS. Returns user_id or None."""
+    """
+    Verify against Clerk JWKS. Returns user_id or None.
+    JWKS are cached for 5 minutes to avoid a round-trip on every request.
+    On decode failure the cache is invalidated and refreshed once.
+    """
+    global _clerk_jwks_cache, _clerk_jwks_fetched_at
+
     if not settings.CLERK_SECRET_KEY:
         return None
+
+    async def _fetch_jwks() -> Optional[dict]:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    "https://api.clerk.dev/v1/jwks",
+                    headers={"Authorization": f"Bearer {settings.CLERK_SECRET_KEY}"},
+                    timeout=5.0,
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except Exception:
+            return None
+
+    # Refresh cache if missing or stale
+    now = datetime.utcnow()
+    if (
+        _clerk_jwks_cache is None
+        or _clerk_jwks_fetched_at is None
+        or (now - _clerk_jwks_fetched_at) > _CLERK_JWKS_TTL
+    ):
+        jwks = await _fetch_jwks()
+        if jwks:
+            _clerk_jwks_cache = jwks
+            _clerk_jwks_fetched_at = now
+
+    if not _clerk_jwks_cache:
+        return None
+
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                "https://api.clerk.dev/v1/jwks",
-                headers={"Authorization": f"Bearer {settings.CLERK_SECRET_KEY}"},
-                timeout=5.0,
-            )
-            jwks = resp.json()
         payload = jwt.decode(
             token,
-            jwks,
+            _clerk_jwks_cache,
             algorithms=["RS256"],
             options={"verify_aud": False},
         )
         return payload.get("sub")
     except Exception:
-        return None
+        # Cache may be stale (key rotation) — invalidate and retry once
+        _clerk_jwks_cache = None
+        _clerk_jwks_fetched_at = None
+        jwks = await _fetch_jwks()
+        if not jwks:
+            return None
+        _clerk_jwks_cache = jwks
+        _clerk_jwks_fetched_at = datetime.utcnow()
+        try:
+            payload = jwt.decode(
+                token,
+                _clerk_jwks_cache,
+                algorithms=["RS256"],
+                options={"verify_aud": False},
+            )
+            return payload.get("sub")
+        except Exception:
+            return None
 
 
 def _try_local_jwt(token: str) -> Optional[str]:

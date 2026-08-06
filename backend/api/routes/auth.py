@@ -58,7 +58,9 @@ async def supabase_register(
             "password": data.password,
         })
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        import logging
+        logging.getLogger("mediguard.auth").warning("Supabase sign_up failed: %s", e)
+        raise HTTPException(status_code=400, detail="Registration failed. The email may already be registered.")
 
     if not response.user:
         raise HTTPException(status_code=400, detail="Registration failed.")
@@ -183,7 +185,15 @@ async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
 
 @router.post("/token")
 async def get_token(clerk_id: str, db: AsyncSession = Depends(get_db)):
-    """Dev-only: exchange a clerk_id for a local JWT."""
+    """
+    Dev-only: exchange a clerk_id for a local JWT.
+    Blocked entirely in production — use Supabase or Clerk auth instead.
+    """
+    if settings.ENVIRONMENT == "production":
+        raise HTTPException(
+            status_code=403,
+            detail="Local token endpoint is disabled in production.",
+        )
     result = await db.execute(select(User).where(User.clerk_id == clerk_id))
     user = result.scalar_one_or_none()
     if not user:

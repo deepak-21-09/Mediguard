@@ -111,4 +111,8 @@ Return ONLY a valid JSON object with these exact keys:
             )
             return json.loads(response.choices[0].message.content)
     except Exception as e:
-        return {"analysis": f"Analysis unavailable: {e}", "possible_causes": [], "related_medications": []}
+        import logging
+        logging.getLogger("mediguard.symptoms").warning(
+            "AI symptom analysis failed for user %s: %s", user_id, e
+        )
+        return {"analysis": "Analysis temporarily unavailable.", "possible_causes": [], "related_medications": []}

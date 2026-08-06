@@ -134,7 +134,9 @@ class SymptomOut(BaseModel):
 # ── Chat ──────────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    message: str
+    # 4 000 chars ≈ ~1 000 tokens — enough for any reasonable message while
+    # preventing accidental or intentional megabyte payloads hitting the LLM.
+    message: str = Field(..., min_length=1, max_length=4000)
     session_id: Optional[str] = None
 
 

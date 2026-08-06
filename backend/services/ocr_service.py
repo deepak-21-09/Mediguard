@@ -96,4 +96,6 @@ async def _extract_with_openai(image_bytes: bytes) -> dict:
         )
         return json.loads(response.choices[0].message.content)
     except Exception as e:
-        return {"medications": [], "error": str(e), "ocr_available": True}
+        import logging
+        logging.getLogger("mediguard.ocr").warning("OpenAI OCR extraction failed: %s", e)
+        return {"medications": [], "ocr_available": True, "error": "OCR extraction failed. Please try again."}

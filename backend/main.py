@@ -77,16 +77,9 @@ app.include_router(reminders.router, prefix="/api/v1")
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "ok",
-        "app": settings.APP_NAME,
-        "version": "1.0.0",
-        "environment": settings.ENVIRONMENT,
-        "debug": settings.DEBUG,
-        "database": "supabase_postgres" if not settings.is_sqlite else "sqlite",
-        "storage": "supabase" if settings.is_supabase_configured else "local",
-        "cors_origins": _allow_origins,
-    }
+    # Keep internal topology out of unauthenticated responses.
+    # Return only what a load-balancer or uptime monitor needs.
+    return {"status": "ok", "version": "1.0.0"}
 
 
 if __name__ == "__main__":

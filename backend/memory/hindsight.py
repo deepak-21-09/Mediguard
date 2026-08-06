@@ -20,7 +20,14 @@ from core.config import settings
 
 
 class InMemoryFallback:
-    """Simple in-process store used when Qdrant is not available."""
+    """
+    Simple in-process store used when Qdrant is not available.
+
+    Capped at MAX_ENTRIES_PER_USER per user to prevent unbounded RAM growth
+    in long-running production deployments. Oldest entries are evicted first.
+    """
+
+    MAX_ENTRIES_PER_USER = 1000
 
     def __init__(self):
         self._store: list[dict] = []
@@ -35,6 +42,12 @@ class InMemoryFallback:
             "metadata": metadata or {},
             "timestamp": datetime.utcnow().isoformat(),
         })
+        # Evict oldest entries for this user if over the cap
+        user_entries = [i for i, m in enumerate(self._store) if m["user_id"] == user_id]
+        if len(user_entries) > self.MAX_ENTRIES_PER_USER:
+            # Remove oldest excess entries (lowest indices = oldest)
+            to_remove = set(user_entries[:len(user_entries) - self.MAX_ENTRIES_PER_USER])
+            self._store = [m for i, m in enumerate(self._store) if i not in to_remove]
         return point_id
 
     async def recall(self, user_id: str, query: str, memory_types: list[str] | None = None, top_k: int = 10) -> list[dict]:

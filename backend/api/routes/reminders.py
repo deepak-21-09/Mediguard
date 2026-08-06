@@ -53,11 +53,20 @@ async def create_reminder(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
+    try:
+        r_type = ReminderType(data.reminder_type)
+    except ValueError:
+        valid = [e.value for e in ReminderType]
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid reminder_type '{data.reminder_type}'. Must be one of: {valid}",
+        )
+
     reminder = Reminder(
         user_id=user_id,
         title=data.title,
         message=data.message,
-        reminder_type=ReminderType(data.reminder_type),
+        reminder_type=r_type,
         medication_id=data.medication_id,
         scheduled_at=data.scheduled_at,
         is_recurring=data.is_recurring,
@@ -84,7 +93,14 @@ async def update_reminder(
         raise HTTPException(status_code=404, detail="Reminder not found")
 
     if data.status:
-        reminder.status = ReminderStatus(data.status)
+        try:
+            reminder.status = ReminderStatus(data.status)
+        except ValueError:
+            valid = [e.value for e in ReminderStatus]
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid status '{data.status}'. Must be one of: {valid}",
+            )
         if data.status == "completed":
             reminder.completed_at = datetime.utcnow()
     if data.snoozed_until:

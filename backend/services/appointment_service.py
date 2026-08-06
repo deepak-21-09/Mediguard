@@ -103,8 +103,13 @@ Generate a pre-appointment summary as JSON:
                 response_format={"type": "json_object"},
             )
     except Exception as e:
-        # Graceful fallback — appointment saved without AI summary
-        appt.ai_summary = f"Summary unavailable: {e}"
+        # Log server-side, return a generic message to the client.
+        # Raw exception strings can leak API keys or internal stack info.
+        import logging
+        logging.getLogger("mediguard.appointments").warning(
+            "AI summary generation failed for appointment %s: %s", appointment_id, e
+        )
+        appt.ai_summary = "AI summary temporarily unavailable. Please try again later."
         await db.commit()
         await db.refresh(appt)
         return appt
