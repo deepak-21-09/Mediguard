@@ -76,7 +76,7 @@ export default function DashboardPage() {
           <h2 className="font-semibold text-[#1E3A5F] mb-4 flex items-center gap-2">
             <Pill className="w-4 h-4" /> Today&apos;s Medications
           </h2>
-          {data?.todays_medications?.length > 0 ? (
+          {(data?.todays_medications?.length ?? 0) > 0 ? (
             <ul className="space-y-2">
               {data.todays_medications.map((m: any, i: number) => (
                 <li key={i} className="flex items-center justify-between text-sm">
@@ -97,7 +97,7 @@ export default function DashboardPage() {
           <h2 className="font-semibold text-[#1E3A5F] mb-4 flex items-center gap-2">
             <Activity className="w-4 h-4" /> Recent Symptoms
           </h2>
-          {data?.recent_symptoms?.length > 0 ? (
+          {(data?.recent_symptoms?.length ?? 0) > 0 ? (
             <ul className="space-y-2">
               {data.recent_symptoms.map((s: any, i: number) => (
                 <li key={i} className="flex items-center justify-between text-sm">

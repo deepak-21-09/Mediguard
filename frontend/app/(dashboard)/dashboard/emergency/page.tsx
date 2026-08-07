@@ -49,7 +49,7 @@ export default function EmergencyCardPage() {
           <div className="flex items-center gap-2 text-xs text-gray-500 uppercase font-semibold mb-2">
             <AlertTriangle className="w-4 h-4 text-orange-500" /> Allergies
           </div>
-          {card?.allergies?.length > 0 ? (
+          {(card?.allergies?.length ?? 0) > 0 ? (
             <div className="flex flex-wrap gap-2">
               {card.allergies.map((a: string) => (
                 <span key={a} className="bg-red-100 text-red-700 px-3 py-1 rounded-full text-sm font-medium">
@@ -67,7 +67,7 @@ export default function EmergencyCardPage() {
           <div className="flex items-center gap-2 text-xs text-gray-500 uppercase font-semibold mb-2">
             <Pill className="w-4 h-4 text-blue-500" /> Current Medications
           </div>
-          {card?.active_medications?.length > 0 ? (
+          {(card?.active_medications?.length ?? 0) > 0 ? (
             <ul className="space-y-1">
               {card.active_medications.map((m: any, i: number) => (
                 <li key={i} className="text-sm text-gray-700">
@@ -92,7 +92,7 @@ export default function EmergencyCardPage() {
         )}
 
         {/* Medical Conditions */}
-        {card?.medical_conditions?.length > 0 && (
+        {(card?.medical_conditions?.length ?? 0) > 0 && (
           <div className="border-t border-red-200 pt-4">
             <div className="text-xs text-gray-500 uppercase font-semibold mb-2">Medical Conditions</div>
             <div className="text-sm text-gray-700">{card.medical_conditions.join(", ")}</div>
